@@ -3,6 +3,7 @@
 # Copyright (c) Megvii, Inc. and its affiliates.
 
 from loguru import logger
+from json import dumps
 
 import cv2
 
@@ -11,7 +12,7 @@ import torch
 from yolox.data.data_augment import preproc
 from yolox.data.datasets import COCO_CLASSES
 from yolox.exp import get_exp
-from yolox.utils import fuse_model, get_model_info, postprocess, vis
+from yolox.utils import fuse_model, get_model_info, postprocess, vis, json
 
 import argparse
 import os
@@ -148,6 +149,7 @@ class Predictor(object):
             outputs = postprocess(
                 outputs, self.num_classes, self.confthre, self.nmsthre
             )
+            #print(img_info)
             logger.info("Infer time: {:.4f}s".format(time.time() - t0))
         return outputs, img_info
 
@@ -155,7 +157,8 @@ class Predictor(object):
         ratio = img_info["ratio"]
         img = img_info["raw_img"]
         if output is None:
-            return img
+            jstr = dumps({'predictions':[]}, ensure_ascii=False, indent=4)
+            return img, jstr
         output = output.cpu()
 
         bboxes = output[:, 0:4]
@@ -165,9 +168,9 @@ class Predictor(object):
 
         cls = output[:, 6]
         scores = output[:, 4] * output[:, 5]
-
         vis_res = vis(img, bboxes, scores, cls, cls_conf, self.cls_names)
-        return vis_res
+        jstr = json(bboxes, scores, cls, cls_conf, self.cls_names)
+        return vis_res, jstr
 
 
 def image_demo(predictor, vis_folder, path, current_time, save_result):
@@ -178,7 +181,7 @@ def image_demo(predictor, vis_folder, path, current_time, save_result):
     files.sort()
     for image_name in files:
         outputs, img_info = predictor.inference(image_name)
-        result_image = predictor.visual(outputs[0], img_info, predictor.confthre)
+        result_image, jstr = predictor.visual(outputs[0], img_info, predictor.confthre)
         if save_result:
             save_folder = os.path.join(
                 vis_folder, time.strftime("%Y_%m_%d_%H_%M_%S", current_time)
@@ -187,6 +190,11 @@ def image_demo(predictor, vis_folder, path, current_time, save_result):
             save_file_name = os.path.join(save_folder, os.path.basename(image_name))
             logger.info("Saving detection result in {}".format(save_file_name))
             cv2.imwrite(save_file_name, result_image)
+            file_name, _ = os.path.splitext(os.path.basename(image_name))
+            json_file_name = os.path.join(save_folder, file_name + ".json")
+            with open(json_file_name, "w") as f:
+              f.write(jstr)
+            
         ch = cv2.waitKey(0)
         if ch == 27 or ch == ord("q") or ch == ord("Q"):
             break
@@ -213,7 +221,7 @@ def imageflow_demo(predictor, vis_folder, current_time, args):
         ret_val, frame = cap.read()
         if ret_val:
             outputs, img_info = predictor.inference(frame)
-            result_frame = predictor.visual(outputs[0], img_info, predictor.confthre)
+            result_frame, _ = predictor.visual(outputs[0], img_info, predictor.confthre)
             if args.save_result:
                 vid_writer.write(result_frame)
             ch = cv2.waitKey(1)
